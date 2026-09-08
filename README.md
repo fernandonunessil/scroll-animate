@@ -1,36 +1,92 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 📦 ScrapFlow — Animação de Palete com Scroll (Scrollytelling)
 
-## Getting Started
+Uma experiência interativa de **scrollytelling** de alta performance construída com **Next.js**, **Framer Motion**, **HTML5 Canvas** e **Tailwind CSS**. Conforme o usuário rola a página, uma sequência contínua de imagens é reproduzida em tempo real, mostrando blocos industriais de sucata compactada caindo e se empilhando perfeitamente sobre um palete de madeira.
 
-First, run the development server:
+---
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## 🚀 Demonstração da Mecânica
+
+O projeto utiliza um container com altura estendida de `400vh` e um elemento `<canvas>` com posicionamento `sticky`:
+
+- **Pré-carregamento com Trava de Scroll**: Todos os 150 frames em formato WebP são carregados previamente na memória antes da rolagem ser liberada, evitando telas pretas ou piscadas (*flickering*).
+- **Mapeamento de Scroll Progress (0 → 1)**: O progresso da rolagem é capturado via hook `useScroll` do Framer Motion e mapeado para o índice exato do frame (1 a 150).
+- **Renderização em HTML5 Canvas**: Desenho a 60–120 FPS utilizando `requestAnimationFrame`, cancelando frames duplicados e oferecendo suporte a telas de alta densidade (Retina/HiDPI).
+- **Seamless Blending**: O fundo do site `#FFFFFF` se funde de forma 100% imperceptível com o estúdio das imagens através de uma máscara radial suave.
+- **Narrativa em Camadas de Texto**:
+  - **0% de Scroll**: *"Transforming Metal Waste."* — O palete de madeira vazio é introduzido.
+  - **30% de Scroll**: *"Precise Compaction."* — Primeiros blocos caem e se acomodam.
+  - **60% de Scroll**: *"Stacking for Efficiency."* — O palete atinge metade da capacidade com precisão geométrica.
+  - **90% de Scroll**: *"Ready for Transit."* — Palete 100% preenchido, amarrado e pronto para logística.
+
+---
+
+## 🛠️ Tecnologias Utilizadas
+
+- **[Next.js 16 (App Router)](https://nextjs.org/)** — Framework React com Turbopack e Server Components.
+- **[React 19](https://react.dev/)** — Biblioteca base para a interface.
+- **[Framer Motion](https://www.framer.com/motion/)** — Orquestração de animações baseadas no scroll (`useScroll`, `useTransform`, `useMotionValueEvent`).
+- **[HTML5 Canvas API](https://developer.mozilla.org/pt-BR/docs/Web/API/Canvas_API)** — Renderização gráfica acelerada por hardware para a sequência de quadros.
+- **[Tailwind CSS v4](https://tailwindcss.com/)** — Estilização moderna e responsiva.
+- **[Lucide React](https://lucide.dev/)** — Conjunto de ícones minimalistas.
+- **[Sharp](https://sharp.pixelplumbing.com/)** — Processamento e otimização dos frames em WebP de altíssima eficiência (~24 KB por quadro).
+
+---
+
+## 📁 Estrutura do Projeto
+
+```text
+scroll-animate/
+├── app/
+│   ├── globals.css              # Reset, pure light mode e custom scrollbars
+│   ├── layout.tsx               # Metadados e fontes (Geist)
+│   └── page.tsx                 # Landing page com navbar, sequência e seções
+├── components/
+│   └── PalletStackSequence.tsx  # Componente principal do canvas e scrollytelling
+├── public/
+│   └── frames/                  # 150 frames otimizados (scrap_pallet_[1..150].webp)
+├── images-animated/             # Sequência original de imagens
+└── package.json
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 💻 Como Rodar o Projeto Localmente
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 1. Clonar o repositório e instalar as dependências:
+```bash
+git clone <url-do-repositorio>
+cd scroll-animate
+npm install
+```
 
-## Learn More
+### 2. Iniciar o servidor de desenvolvimento:
+```bash
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+Abra [http://localhost:3000](http://localhost:3000) no seu navegador para interagir com a animação.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 📦 Build para Produção
 
-## Deploy on Vercel
+Para gerar a versão otimizada de produção e testar a performance máxima:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npm run build
+npm run start
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+## ⚙️ Principais Decisões Técnicas
+
+1. **Por que HTML5 Canvas em vez de tags `<img>` normais?**
+   Trocar o `src` de uma tag `<img>` centenas de vezes durante a rolagem causa engasgos na thread principal e recálculo frequente de layout. O Canvas 2D desenha buffers de bitmap na GPU instantaneamente sem nenhum recálculo de DOM.
+
+2. **Aspect Ratio "Contain" no Canvas:**
+   O canvas recalcula dinamicamente a proporção `16:9` da imagem em relação à largura e altura da janela (`window.innerWidth` e `window.innerHeight`), garantindo que o palete nunca seja cortado em telas de smartphones (portrait) ou monitores ultrawide.
+
+3. **Preloader e Bloqueio de Scroll:**
+   A classe `loading-locked` (`overflow: hidden; touch-action: none`) impede a rolagem do usuário até que todas as 150 imagens estejam carregadas na memória cache do navegador, garantindo uma experiência contínua e sem piscadas.
+
