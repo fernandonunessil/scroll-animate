@@ -13,10 +13,10 @@ O projeto utiliza um container com altura estendida de `400vh` e um elemento `<c
 - **Renderização em HTML5 Canvas**: Desenho a 60–120 FPS utilizando `requestAnimationFrame`, cancelando frames duplicados e oferecendo suporte a telas de alta densidade (Retina/HiDPI).
 - **Seamless Blending**: O fundo do site `#FFFFFF` se funde de forma 100% imperceptível com o estúdio das imagens através de uma máscara radial suave.
 - **Narrativa em Camadas de Texto**:
-  - **0% de Scroll**: *"Transforming Metal Waste."* — O palete de madeira vazio é introduzido.
-  - **30% de Scroll**: *"Precise Compaction."* — Primeiros blocos caem e se acomodam.
-  - **60% de Scroll**: *"Stacking for Efficiency."* — O palete atinge metade da capacidade com precisão geométrica.
-  - **90% de Scroll**: *"Ready for Transit."* — Palete 100% preenchido, amarrado e pronto para logística.
+  - **0% de Scroll**: *"Transformando Sucata em Matéria-Prima."* — O palete de madeira vazio é introduzido.
+  - **30% de Scroll**: *"Compactação de Alta Precisão."* — Primeiros blocos de sucata prensados caem e se acomodam.
+  - **60% de Scroll**: *"Empilhamento para Eficiência."* — O palete atinge metade da capacidade com precisão geométrica.
+  - **90% de Scroll**: *"Pronto para o Forno e Fundição."* — Palete 100% preenchido, cintado e pronto para entrega nas siderúrgicas.
 
 ---
 

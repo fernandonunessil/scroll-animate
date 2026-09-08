@@ -1,12 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import {
-  motion,
-  useScroll,
-  useTransform,
-  useMotionValueEvent,
-} from "framer-motion";
+import { motion, useScroll, useTransform } from "framer-motion";
 import { ArrowDown, Cpu, Layers, ShieldCheck, Box } from "lucide-react";
 
 interface PalletStackSequenceProps {
@@ -21,15 +16,19 @@ export default function PalletStackSequence({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Referências para o HUD (evita re-renderizações React a cada frame de scroll)
+  const frameDisplayRef = useRef<HTMLSpanElement>(null);
+  const scrollDisplayRef = useRef<HTMLSpanElement>(null);
+
   // Buffer de imagens pré-carregadas na memória
   const imagesRef = useRef<HTMLImageElement[]>([]);
   const renderFrameId = useRef<number | null>(null);
   const currentFrameIndexRef = useRef<number>(1);
+  const canvasSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
 
-  // Estados de carregamento e interface
+  // Estados de carregamento inicial
   const [loadedCount, setLoadedCount] = useState<number>(0);
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
-  const [activeFrameDisplay, setActiveFrameDisplay] = useState<number>(1);
 
   // Sincronização de scroll via Framer Motion
   const { scrollYProgress } = useScroll({
@@ -45,7 +44,6 @@ export default function PalletStackSequence({
     let loaded = 0;
     const images: HTMLImageElement[] = [];
 
-    // Bloquear scroll do usuário até que todas as imagens estejam em memória
     document.body.classList.add("loading-locked");
 
     for (let i = 1; i <= totalFrames; i++) {
@@ -63,7 +61,6 @@ export default function PalletStackSequence({
       };
 
       const onImageError = () => {
-        // Fallback seguro caso algum frame falhe
         if (isCancelled) return;
         loaded++;
         setLoadedCount(loaded);
@@ -97,20 +94,15 @@ export default function PalletStackSequence({
       const ctx = canvas.getContext("2d", { alpha: true });
       if (!ctx) return;
 
-      // Normalizar índice de 1 a totalFrames
       const safeIndex = Math.min(totalFrames, Math.max(1, frameIndex));
       const img = imagesRef.current[safeIndex - 1];
 
-      if (!img || !img.complete || img.naturalWidth === 0) {
-        return;
-      }
+      if (!img || !img.complete || img.naturalWidth === 0) return;
 
       const { width: canvasWidth, height: canvasHeight } = canvas;
       const imgWidth = img.naturalWidth;
       const imgHeight = img.naturalHeight;
 
-      // Algoritmo de aspect-ratio: "contain"
-      // Preserva 100% da proporção sem distorção e centraliza na tela
       const imgRatio = imgWidth / imgHeight;
       const canvasRatio = canvasWidth / canvasHeight;
 
@@ -120,23 +112,18 @@ export default function PalletStackSequence({
       let drawY: number;
 
       if (canvasRatio > imgRatio) {
-        // Tela mais larga que a imagem: ajusta pela altura
         drawHeight = canvasHeight;
         drawWidth = canvasHeight * imgRatio;
         drawX = (canvasWidth - drawWidth) / 2;
         drawY = 0;
       } else {
-        // Tela mais alta que a imagem (mobile/tablet portrait): ajusta pela largura
         drawWidth = canvasWidth;
         drawHeight = canvasWidth / imgRatio;
         drawX = 0;
         drawY = (canvasHeight - drawHeight) / 2;
       }
 
-      // Limpar o frame anterior
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-
-      // Renderizar a imagem no canvas com interpolação de alta qualidade
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
@@ -145,7 +132,7 @@ export default function PalletStackSequence({
   );
 
   // -------------------------------------------------------------
-  // 3. REDIMENSIONAMENTO DINÂMICO COM SUPORTE A RETINA / HIDPI
+  // 3. REDIMENSIONAMENTO ESTÁVEL (Anti-Shake com Tolerância)
   // -------------------------------------------------------------
   const handleResize = useCallback(() => {
     const canvas = canvasRef.current;
@@ -154,16 +141,19 @@ export default function PalletStackSequence({
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const rect = canvas.getBoundingClientRect();
 
-    const displayWidth = Math.floor(rect.width * dpr);
-    const displayHeight = Math.floor(rect.height * dpr);
+    const targetWidth = Math.round(rect.width * dpr);
+    const targetHeight = Math.round(rect.height * dpr);
 
-    if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
-      canvas.width = displayWidth;
-      canvas.height = displayHeight;
+    // Só reatribui tamanho se houver variação real superior a 2px (previne jitter de layout)
+    if (
+      Math.abs(canvasSizeRef.current.w - targetWidth) > 2 ||
+      Math.abs(canvasSizeRef.current.h - targetHeight) > 2
+    ) {
+      canvasSizeRef.current = { w: targetWidth, h: targetHeight };
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      drawFrame(currentFrameIndexRef.current);
     }
-
-    // Redesenha o frame atual
-    drawFrame(currentFrameIndexRef.current);
   }, [drawFrame]);
 
   useEffect(() => {
@@ -172,7 +162,6 @@ export default function PalletStackSequence({
     return () => window.removeEventListener("resize", handleResize);
   }, [handleResize]);
 
-  // Redesenhar o primeiro frame assim que o pré-carregamento for concluído
   useEffect(() => {
     if (isLoaded) {
       handleResize();
@@ -181,65 +170,99 @@ export default function PalletStackSequence({
   }, [isLoaded, handleResize, drawFrame]);
 
   // -------------------------------------------------------------
-  // 4. MAPEAR O SCROLL PARA O FRAME CORRESPONDENTE
+  // 4. MAPEAR SCROLL PROGRESS PARA FRAME (Zero React Re-renders)
   // -------------------------------------------------------------
-  useMotionValueEvent(scrollYProgress, "change", (latestProgress) => {
-    if (!isLoaded) return;
+  useEffect(() => {
+    const unsubscribe = scrollYProgress.on("change", (latestProgress) => {
+      if (!isLoaded) return;
 
-    // Converte progress (0 -> 1) para índice de frame (1 -> totalFrames)
-    const targetIndex = Math.min(
-      totalFrames,
-      Math.max(1, Math.round(latestProgress * (totalFrames - 1)) + 1),
-    );
+      const targetIndex = Math.min(
+        totalFrames,
+        Math.max(1, Math.round(latestProgress * (totalFrames - 1)) + 1),
+      );
 
-    if (targetIndex !== currentFrameIndexRef.current) {
-      currentFrameIndexRef.current = targetIndex;
-      setActiveFrameDisplay(targetIndex);
-
-      if (renderFrameId.current) {
-        cancelAnimationFrame(renderFrameId.current);
+      // Atualiza o HUD diretamente no DOM sem re-renderizar o React inteiro
+      if (frameDisplayRef.current) {
+        frameDisplayRef.current.textContent = `${String(targetIndex).padStart(3, "0")} / ${totalFrames}`;
+      }
+      if (scrollDisplayRef.current) {
+        scrollDisplayRef.current.textContent = `${Math.round(latestProgress * 100)}%`;
       }
 
-      renderFrameId.current = requestAnimationFrame(() => {
-        drawFrame(targetIndex);
-      });
-    }
+      if (targetIndex !== currentFrameIndexRef.current) {
+        currentFrameIndexRef.current = targetIndex;
+
+        if (renderFrameId.current) {
+          cancelAnimationFrame(renderFrameId.current);
+        }
+
+        renderFrameId.current = requestAnimationFrame(() => {
+          drawFrame(targetIndex);
+        });
+      }
+    });
+
+    return () => unsubscribe();
+  }, [scrollYProgress, isLoaded, totalFrames, drawFrame]);
+
+  // -------------------------------------------------------------
+  // 5. ANIMAÇÕES DE TEXTO SUAVES (Zero Reflow / Apenas Opacity e Y)
+  // -------------------------------------------------------------
+  // 0% Scroll: Hero no topo
+  const opacity0 = useTransform(scrollYProgress, [0, 0.08, 0.12], [1, 1, 0], {
+    clamp: true,
   });
+  const y0 = useTransform(scrollYProgress, [0, 0.12], [0, -30], {
+    clamp: true,
+  });
+  const vis0 = useTransform(opacity0, (v) =>
+    v > 0.001 ? "visible" : "hidden",
+  );
 
-  // -------------------------------------------------------------
-  // 5. ANIMAÇÕES DE TEXTO VINCULADAS AO SCROLL (THE STORY)
-  // -------------------------------------------------------------
-  // 0% Scroll: "Transforming Metal Waste."
-  const opacity0 = useTransform(scrollYProgress, [0, 0.12, 0.18], [1, 1, 0]);
-  const y0 = useTransform(scrollYProgress, [0, 0.18], [0, -40]);
-
-  // 30% Scroll: "Precise Compaction."
+  // 30% Scroll: Compactação (Lateral Esquerda)
   const opacity30 = useTransform(
     scrollYProgress,
-    [0.18, 0.28, 0.38, 0.45],
+    [0.15, 0.22, 0.35, 0.42],
     [0, 1, 1, 0],
+    { clamp: true },
   );
-  const y30 = useTransform(scrollYProgress, [0.18, 0.28, 0.45], [40, 0, -30]);
+  const y30 = useTransform(
+    scrollYProgress,
+    [0.15, 0.22, 0.35, 0.42],
+    [30, 0, 0, -20],
+    { clamp: true },
+  );
+  const vis30 = useTransform(opacity30, (v) =>
+    v > 0.001 ? "visible" : "hidden",
+  );
 
-  // 60% Scroll: "Stacking for Efficiency."
+  // 60% Scroll: Empilhamento (Lateral Direita)
   const opacity60 = useTransform(
     scrollYProgress,
-    [0.45, 0.55, 0.68, 0.75],
+    [0.45, 0.52, 0.65, 0.72],
     [0, 1, 1, 0],
+    { clamp: true },
   );
-  const y60 = useTransform(scrollYProgress, [0.45, 0.55, 0.75], [40, 0, -30]);
+  const y60 = useTransform(
+    scrollYProgress,
+    [0.45, 0.52, 0.65, 0.72],
+    [30, 0, 0, -20],
+    { clamp: true },
+  );
+  const vis60 = useTransform(opacity60, (v) =>
+    v > 0.001 ? "visible" : "hidden",
+  );
 
-  // 90% Scroll: "Ready for Transit."
-  const opacity90 = useTransform(scrollYProgress, [0.75, 0.85, 1], [0, 1, 1]);
-  const y90 = useTransform(scrollYProgress, [0.75, 0.88], [40, 0]);
-
-  // HUD: Barra de progresso visual de scroll
-  const scrollPercentage = useTransform(scrollYProgress, [0, 1], [0, 100]);
-  const [displayScrollPct, setDisplayScrollPct] = useState(0);
-
-  useMotionValueEvent(scrollPercentage, "change", (latest) => {
-    setDisplayScrollPct(Math.round(latest));
+  // 90% Scroll: Expedição (Centralizado)
+  const opacity90 = useTransform(scrollYProgress, [0.76, 0.84, 1], [0, 1, 1], {
+    clamp: true,
   });
+  const y90 = useTransform(scrollYProgress, [0.76, 0.85], [30, 0], {
+    clamp: true,
+  });
+  const vis90 = useTransform(opacity90, (v) =>
+    v > 0.001 ? "visible" : "hidden",
+  );
 
   const progressPct = Math.round((loadedCount / totalFrames) * 100);
 
@@ -249,7 +272,7 @@ export default function PalletStackSequence({
       className="relative w-full h-[400vh] bg-white select-none"
     >
       {/* ------------------------------------------------------- */}
-      {/* OVERLAY DE PRÉ-CARREGAMENTO (Awwwards Sleek Loader)     */}
+      {/* OVERLAY DE PRÉ-CARREGAMENTO (Loader Industrial Elegante) */}
       {/* ------------------------------------------------------- */}
       <div
         className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-white transition-opacity duration-700 pointer-events-none ${
@@ -259,18 +282,16 @@ export default function PalletStackSequence({
         }`}
       >
         <div className="flex flex-col items-center max-w-sm w-full px-6">
-          {/* Logo & Marca Industrial */}
           <div className="flex items-center gap-2 mb-8">
             <span className="w-2.5 h-2.5 bg-black rounded-xs animate-pulse" />
             <span className="font-mono text-xs tracking-widest uppercase font-semibold text-black/90">
-              SCRAPFLOW
+              SCRAPFLOW METAIS
             </span>
             <span className="text-[10px] font-mono px-1.5 py-0.5 bg-black/5 rounded text-black/50">
-              SYS-150
+              RECICLADORA INDUSTRIAL
             </span>
           </div>
 
-          {/* Spinner minimalista */}
           <div className="relative w-16 h-16 mb-8 flex items-center justify-center">
             <div className="absolute inset-0 border-2 border-black/10 rounded-full" />
             <div className="absolute inset-0 border-2 border-black border-t-transparent rounded-full animate-spin" />
@@ -279,7 +300,6 @@ export default function PalletStackSequence({
             </span>
           </div>
 
-          {/* Barra de progresso linear fina */}
           <div className="w-full h-1 bg-black/5 rounded-full overflow-hidden mb-3">
             <div
               className="h-full bg-black transition-all duration-150 ease-out"
@@ -287,11 +307,10 @@ export default function PalletStackSequence({
             />
           </div>
 
-          {/* Texto de Status */}
           <div className="flex justify-between w-full font-mono text-[11px] text-black/40">
-            <span>PRELOADING SEQUENCE</span>
+            <span>CARREGANDO OPERAÇÃO</span>
             <span>
-              {loadedCount}/{totalFrames} FRAMES
+              {loadedCount}/{totalFrames} QUADROS
             </span>
           </div>
         </div>
@@ -305,8 +324,6 @@ export default function PalletStackSequence({
         <div
           className="relative w-full h-full flex items-center justify-center"
           style={{
-            // Máscara suave radial nas bordas: garante que qualquer leve vinheta
-            // de estúdio 3D se dissipe 100% de forma invisível no fundo branco puro (#FFFFFF)
             WebkitMaskImage:
               "radial-gradient(ellipse 96% 92% at 50% 50%, #000 70%, transparent 100%)",
             maskImage:
@@ -320,29 +337,32 @@ export default function PalletStackSequence({
         </div>
 
         {/* ----------------------------------------------------- */}
-        {/* HUD INDUSTRIAL (Awwwards Technical Overlays)          */}
+        {/* HUD INDUSTRIAL (Informações Técnicas de Operação)     */}
         {/* ----------------------------------------------------- */}
         <div className="absolute top-20 left-6 md:left-12 z-20 pointer-events-none hidden sm:flex items-center gap-4">
-          <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-black/10 bg-white/80 backdrop-blur-xs">
+          <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-black/10 bg-white/85 backdrop-blur-md shadow-2xs">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
             <span className="font-mono text-[10px] tracking-wider text-black/70 uppercase">
-              LIVE SEQUENCE // 150 FPS ENGINE
+              PÁTIO DE TRIAGEM & PRENSAGEM // OPERAÇÃO CONTÍNUA
             </span>
           </div>
         </div>
 
-        <div className="absolute bottom-8 right-6 md:right-12 z-20 pointer-events-none flex items-center gap-6 font-mono text-[11px] text-black/50">
+        <div className="absolute bottom-8 right-6 md:right-12 z-20 pointer-events-none flex items-center gap-6 font-mono text-[11px] text-black/50 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-black/5">
           <div className="flex items-center gap-2">
-            <span className="text-black/30">FRAME</span>
-            <span className="font-semibold text-black/80">
-              {String(activeFrameDisplay).padStart(3, "0")} / {totalFrames}
+            <span className="text-black/30">ETAPA</span>
+            <span ref={frameDisplayRef} className="font-semibold text-black/80">
+              001 / {totalFrames}
             </span>
           </div>
           <div className="h-3 w-[1px] bg-black/10" />
           <div className="flex items-center gap-2">
-            <span className="text-black/30">SCROLL</span>
-            <span className="font-semibold text-black/80">
-              {displayScrollPct}%
+            <span className="text-black/30">ROLAGEM</span>
+            <span
+              ref={scrollDisplayRef}
+              className="font-semibold text-black/80"
+            >
+              0%
             </span>
           </div>
         </div>
@@ -350,142 +370,164 @@ export default function PalletStackSequence({
         {/* ----------------------------------------------------- */}
         {/* SEÇÕES DE TEXTO NARRATIVO (THE STORY OVERLAYS)       */}
         {/* ----------------------------------------------------- */}
-        <div className="absolute inset-0 pointer-events-none flex items-center justify-center px-6 md:px-16">
-          {/* SECTION 1: 0% Scroll - Hero Centralizado */}
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          {/* SEÇÃO 1: 0% Scroll - Hero Posicionado no Topo (Palete livre no centro) */}
           <motion.div
-            style={{ opacity: opacity0, y: y0 }}
-            className="absolute inset-0 flex flex-col items-center justify-center text-center max-w-4xl mx-auto px-4"
+            style={{
+              opacity: opacity0,
+              y: y0,
+              visibility: vis0,
+            }}
+            className="absolute top-20 sm:top-24 left-0 right-0 mx-auto flex flex-col items-center text-center w-[92vw] max-w-3xl px-4 z-20 will-change-transform"
           >
-            <div className="inline-flex items-center gap-2 px-3 py-1 mb-6 rounded-full border border-black/10 bg-black/[0.02]">
+            <div className="inline-flex items-center gap-2 px-3 py-1 mb-4 rounded-full border border-black/10 bg-white/90 backdrop-blur-md shadow-2xs">
               <Cpu className="w-3.5 h-3.5 text-black/70" />
-              <span className="font-mono text-[11px] tracking-widest uppercase text-black/60 font-medium">
-                Next-Gen Scrap Metallurgy
+              <span className="font-mono text-[11px] tracking-widest uppercase text-black/70 font-medium">
+                Reciclagem Industrial de Sucatas Metálicas
               </span>
             </div>
-            <h1 className="text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-medium tracking-tight text-black/90 leading-[1.05] mb-6">
-              Transforming Metal Waste.
+            <h1 className="text-3xl sm:text-5xl md:text-6xl font-medium tracking-tight text-black/90 leading-[1.08] mb-4">
+              Transformando Sucata em Matéria-Prima.
             </h1>
-            <p className="text-base sm:text-lg md:text-xl text-black/60 max-w-2xl font-normal leading-relaxed mb-8">
-              Engineered closed-loop recycling. We transform discarded
-              industrial alloys into standardized, high-density scrap units
-              ready for sustainable re-smelting.
+            <p className="text-sm sm:text-base text-black/60 max-w-xl font-normal leading-relaxed mb-4">
+              Coleta, triagem técnica e prensagem de descartes ferrosos e
+              não-ferrosos em fardos de alta densidade para pronto
+              reabastecimento de siderúrgicas e fundições.
             </p>
-            <div className="flex items-center gap-2 text-xs font-mono text-black/40 tracking-wider">
-              <span>SCROLL TO INITIALIZE COMPACTION</span>
-              <ArrowDown className="w-3.5 h-3.5 animate-bounce text-black/60" />
+            <div className="flex items-center gap-2 text-xs font-mono text-black/50 tracking-wider bg-black/5 px-3 py-1 rounded-full">
+              <span>ROLE PARA VER O PROCESSO DE COMPACTAÇÃO</span>
+              <ArrowDown className="w-3.5 h-3.5 animate-bounce text-black/70" />
             </div>
           </motion.div>
 
-          {/* SECTION 2: 30% Scroll - Alinhado à Esquerda */}
+          {/* SEÇÃO 2: 30% Scroll - Lateral Esquerda com Dimensão Fixa */}
           <motion.div
-            style={{ opacity: opacity30, y: y30 }}
-            className="absolute left-6 sm:left-12 md:left-24 max-w-md lg:max-w-lg text-left"
+            style={{
+              opacity: opacity30,
+              y: y30,
+              visibility: vis30,
+            }}
+            className="absolute top-1/2 -translate-y-1/2 left-4 sm:left-10 md:left-16 w-[calc(100vw-2rem)] sm:w-[400px] max-w-[400px] z-20 will-change-transform"
           >
-            <div className="inline-flex items-center gap-2 px-2.5 py-1 mb-4 rounded-full border border-black/10 bg-black/[0.02]">
-              <Box className="w-3.5 h-3.5 text-black/70" />
-              <span className="font-mono text-[11px] tracking-widest uppercase text-black/60 font-medium">
-                Phase 01 // 3,200 PSI Pressure
-              </span>
-            </div>
-            <h2 className="text-3xl sm:text-5xl md:text-6xl font-medium tracking-tight text-black/90 leading-[1.1] mb-4">
-              Precise Compaction.
-            </h2>
-            <p className="text-sm sm:text-base md:text-lg text-black/60 leading-relaxed mb-6 font-normal">
-              High-tonnage hydraulic baling presses compress mixed alloy offcuts
-              into uniform, calibrated cubic blocks. Void spaces are eliminated
-              to achieve over 85% solid density.
-            </p>
-            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-black/10">
-              <div>
-                <span className="block font-mono text-[10px] uppercase text-black/40">
-                  Block Dimension
-                </span>
-                <span className="font-mono text-sm font-semibold text-black/80">
-                  400 × 400 × 400 mm
+            <div className="p-6 sm:p-8 rounded-3xl border border-black/10 bg-white/90 backdrop-blur-md shadow-lg shadow-black/5">
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 mb-3 rounded-full border border-black/10 bg-black/[0.03]">
+                <Box className="w-3.5 h-3.5 text-black/70" />
+                <span className="font-mono text-[10px] tracking-widest uppercase text-black/70 font-medium">
+                  Etapa 01 // Prensagem 3.200 PSI
                 </span>
               </div>
-              <div>
-                <span className="block font-mono text-[10px] uppercase text-black/40">
-                  Unit Weight
-                </span>
-                <span className="font-mono text-sm font-semibold text-black/80">
-                  ~280 kg / Cube
-                </span>
-              </div>
-            </div>
-          </motion.div>
-
-          {/* SECTION 3: 60% Scroll - Alinhado à Direita */}
-          <motion.div
-            style={{ opacity: opacity60, y: y60 }}
-            className="absolute right-6 sm:right-12 md:right-24 max-w-md lg:max-w-lg text-right"
-          >
-            <div className="inline-flex items-center gap-2 px-2.5 py-1 mb-4 rounded-full border border-black/10 bg-black/[0.02]">
-              <Layers className="w-3.5 h-3.5 text-black/70" />
-              <span className="font-mono text-[11px] tracking-widest uppercase text-black/60 font-medium">
-                Phase 02 // Geometric Stacking
-              </span>
-            </div>
-            <h2 className="text-3xl sm:text-5xl md:text-6xl font-medium tracking-tight text-black/90 leading-[1.1] mb-4">
-              Stacking for Efficiency.
-            </h2>
-            <p className="text-sm sm:text-base md:text-lg text-black/60 leading-relaxed mb-6 font-normal">
-              Automated robotic gantries align compacted metal blocks with
-              sub-millimeter accuracy onto reinforced pallets, maximizing
-              spatial volume for global container freight.
-            </p>
-            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-black/10">
-              <div className="text-right">
-                <span className="block font-mono text-[10px] uppercase text-black/40">
-                  Freight Efficiency
-                </span>
-                <span className="font-mono text-sm font-semibold text-emerald-600">
-                  +42% Volume Gain
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="block font-mono text-[10px] uppercase text-black/40">
-                  Center of Gravity
-                </span>
-                <span className="font-mono text-sm font-semibold text-black/80">
-                  Balanced Axial
-                </span>
+              <h2 className="text-2xl sm:text-4xl font-medium tracking-tight text-black/90 leading-[1.1] mb-3">
+                Compactação de Alta Precisão.
+              </h2>
+              <p className="text-xs sm:text-sm text-black/60 leading-relaxed mb-4 font-normal">
+                Prensas hidráulicas de grande tonelagem compactam sobras de
+                estamparia, cavacos e chapas em blocos cúbicos padronizados,
+                eliminando bolsas de ar para atingir +85% de densidade sólida.
+              </p>
+              <div className="grid grid-cols-2 gap-4 pt-3 border-t border-black/10">
+                <div>
+                  <span className="block font-mono text-[10px] uppercase text-black/40">
+                    Dimensão do Fardo
+                  </span>
+                  <span className="font-mono text-xs sm:text-sm font-semibold text-black/80">
+                    400 × 400 × 400 mm
+                  </span>
+                </div>
+                <div>
+                  <span className="block font-mono text-[10px] uppercase text-black/40">
+                    Peso Médio
+                  </span>
+                  <span className="font-mono text-xs sm:text-sm font-semibold text-black/80">
+                    ~280 kg / Fardo
+                  </span>
+                </div>
               </div>
             </div>
           </motion.div>
 
-          {/* SECTION 4: 90% Scroll - Centralizado (Final Hook) */}
+          {/* SEÇÃO 3: 60% Scroll - Lateral Direita com Dimensão Fixa */}
           <motion.div
-            style={{ opacity: opacity90, y: y90 }}
-            className="absolute inset-0 flex flex-col items-center justify-center text-center max-w-3xl mx-auto px-4"
+            style={{
+              opacity: opacity60,
+              y: y60,
+              visibility: vis60,
+            }}
+            className="absolute top-1/2 -translate-y-1/2 right-4 sm:right-10 md:right-16 w-[calc(100vw-2rem)] sm:w-[400px] max-w-[400px] z-20 will-change-transform text-right"
           >
-            <div className="inline-flex items-center gap-2 px-3 py-1 mb-6 rounded-full border border-black/10 bg-black/[0.02]">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="font-mono text-[11px] tracking-widest uppercase text-black/60 font-medium">
-                Phase 03 // Certified Transport Spec
-              </span>
+            <div className="p-6 sm:p-8 rounded-3xl border border-black/10 bg-white/90 backdrop-blur-md shadow-lg shadow-black/5 text-right">
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 mb-3 rounded-full border border-black/10 bg-black/[0.03]">
+                <Layers className="w-3.5 h-3.5 text-black/70" />
+                <span className="font-mono text-[10px] tracking-widest uppercase text-black/70 font-medium">
+                  Etapa 02 // Paletização Inteligente
+                </span>
+              </div>
+              <h2 className="text-2xl sm:text-4xl font-medium tracking-tight text-black/90 leading-[1.1] mb-3">
+                Empilhamento para Eficiência.
+              </h2>
+              <p className="text-xs sm:text-sm text-black/60 leading-relaxed mb-4 font-normal">
+                Pórticos robotizados alinham os fardos compactados com precisão
+                milimétrica sobre paletes de madeira reforçados, maximizando a
+                carga útil do transporte e zerando perdas no frete.
+              </p>
+              <div className="grid grid-cols-2 gap-4 pt-3 border-t border-black/10">
+                <div className="text-right">
+                  <span className="block font-mono text-[10px] uppercase text-black/40">
+                    Ganho de Carga
+                  </span>
+                  <span className="font-mono text-xs sm:text-sm font-semibold text-emerald-600">
+                    +42% no Frete
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="block font-mono text-[10px] uppercase text-black/40">
+                    Estabilidade
+                  </span>
+                  <span className="font-mono text-xs sm:text-sm font-semibold text-black/80">
+                    Gravidade Neutra
+                  </span>
+                </div>
+              </div>
             </div>
-            <h2 className="text-4xl sm:text-6xl md:text-7xl font-medium tracking-tight text-black/90 leading-[1.1] mb-6">
-              Ready for Transit.
-            </h2>
-            <p className="text-base sm:text-lg md:text-xl text-black/60 max-w-xl leading-relaxed mb-8 font-normal">
-              Strapped, barcoded, and ISO 14001 certified. The consolidated
-              pallet is ready for intermodal rail and vessel transit directly to
-              electric arc furnace foundries.
-            </p>
-            <div className="flex flex-col sm:flex-row items-center gap-4 pointer-events-auto">
-              <a
-                href="#specifications"
-                className="px-6 py-3.5 rounded-full bg-black text-white text-sm font-medium hover:bg-black/80 transition-colors shadow-xs"
-              >
-                Inspect Technical Specs
-              </a>
-              <a
-                href="#contact"
-                className="px-6 py-3.5 rounded-full border border-black/15 text-black/80 text-sm font-medium hover:bg-black/5 transition-colors"
-              >
-                Request Supply Contract
-              </a>
+          </motion.div>
+
+          {/* SEÇÃO 4: 90% Scroll - Centralizado com Dimensão Fixa */}
+          <motion.div
+            style={{
+              opacity: opacity90,
+              y: y90,
+              visibility: vis90,
+            }}
+            className="absolute top-1/2 -translate-y-1/2 left-0 right-0 mx-auto w-[calc(100vw-2rem)] sm:w-[500px] max-w-[500px] z-20 will-change-transform"
+          >
+            <div className="w-full p-8 sm:p-10 rounded-3xl border border-black/10 bg-white/95 backdrop-blur-md shadow-xl shadow-black/5 flex flex-col items-center text-center">
+              <div className="inline-flex items-center gap-2 px-3 py-1 mb-4 rounded-full border border-black/10 bg-emerald-50">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="font-mono text-[10px] tracking-widest uppercase text-emerald-800 font-semibold">
+                  Etapa 03 // Pronto para Expedição e Fundição
+                </span>
+              </div>
+              <h2 className="text-3xl sm:text-5xl font-medium tracking-tight text-black/90 leading-[1.1] mb-3">
+                Pronto para o Forno.
+              </h2>
+              <p className="text-xs sm:text-sm text-black/60 max-w-md leading-relaxed mb-6 font-normal">
+                Palete 100% carregado, cintado, identificado e com laudo de
+                espectrometria emitido. Pronto para embarque direto aos fornos
+                elétricos a arco (FEA) e fornos de indução.
+              </p>
+              <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto pointer-events-auto">
+                <a
+                  href="#metais"
+                  className="w-full sm:w-auto px-6 py-3 rounded-full bg-black text-white text-xs font-mono uppercase tracking-wider hover:bg-black/80 transition-colors shadow-xs text-center"
+                >
+                  Ver Tipos de Metais
+                </a>
+                <a
+                  href="#contato"
+                  className="w-full sm:w-auto px-6 py-3 rounded-full border border-black/15 text-black/80 text-xs font-mono uppercase tracking-wider hover:bg-black/5 transition-colors text-center"
+                >
+                  Solicitar Coleta / Cotação
+                </a>
+              </div>
             </div>
           </motion.div>
         </div>
